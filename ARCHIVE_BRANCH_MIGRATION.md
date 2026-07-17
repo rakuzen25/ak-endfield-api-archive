@@ -10,12 +10,12 @@ plus coordination (pausing the cron trigger, notifying fork owners).
 
 Current state of the repo:
 
-- ~580 commits on `main`, of which ~486 (84%) are `[Auto] API update` — actual code
+- ~600 commits on `main`, of which ~494 (82%) are `[Auto] API update` — actual code
   changes are buried in the commit list.
 - Repo size is ~423 MB and growing at roughly ~1 GB/year. The working tree carries
   ~853 MB of `output/` (817 MB of it `output/raw/`).
-- The planned bulletin archiving (issue #3) adds banner images and more JSON, which
-  accelerates growth.
+- The bulletin archiving (issue #3, merged as PR #4) adds banner images and more JSON,
+  which accelerates growth.
 
 The cost of this migration scales with adoption: today there are **2 forks, 0 open PRs,
 and no known external consumers of the raw data** (the only consumer is this repo's own
@@ -25,7 +25,7 @@ and no known external consumers of the raw data** (the only consumer is this rep
 
 | Branch | Contents | History |
 |---|---|---|
-| `main` (default) | Code only: `src/`, `pages-v2/`, workflows, configs. `output/` is gitignored. | Rewritten: ~90–100 code commits, a few MB total. |
+| `main` (default) | Code only: `src/`, `pages-v2/`, workflows, configs. `output/` is gitignored. | Rewritten: ~100–110 code commits, ~100 MB total (mostly `pages-v2` webfonts — see "Expected questions"). |
 | `archive` | The data: `output/` (same layout as today). | The **complete pre-rewrite history of `main`**, unchanged — every existing commit SHA remains reachable. New `[Auto] API update` commits land here. |
 
 Three design choices keep this cheap:
@@ -55,8 +55,9 @@ Three design choices keep this cheap:
    ```bash
    git clone --mirror https://github.com/daydreamer-json/ak-endfield-api-archive.git ef-api-backup.git
    ```
-4. **Check branch protection on `main`.** If force pushes are blocked, temporarily allow
-   them (Settings → Branches), or plan to delete/recreate the rule.
+4. **Check branch protection on `main`.** If force pushes are blocked **or signed
+   commits are required**, temporarily relax the rule (Settings → Branches) — the
+   rewritten history is both force-pushed and unsigned (see "Expected questions").
 5. **Install git-filter-repo** (the tool the git project recommends over
    `filter-branch`/BFG):
    ```bash
@@ -89,9 +90,9 @@ This removes `output/` from every commit in history. The ~486 auto-commits becom
 and are pruned automatically. Sanity checks before pushing anything:
 
 ```bash
-git log --oneline | wc -l        # expect roughly 90–100 (was ~580)
+git log --oneline | wc -l        # expect roughly 100–110 (was ~600)
 git log --oneline -- output      # expect no results
-du -sh .git                      # expect a few MB (was ~420 MB)
+du -sh .git                      # expect ~100 MB (was ~420 MB); see "Expected questions"
 ```
 
 Do **not** push yet — Phase 3 changes go into the same push so the workflow and website
@@ -105,11 +106,18 @@ All of the following as one commit (or a few) on the rewritten `main` in `rewrit
 
 ```gitignore
 # .gitignore
-output/
+/output/
+/data/
 ```
 
 (Local runs of the archiver still write to `./output` by default; it just no longer
-belongs on `main`.)
+belongs on `main`. Ignoring `/data/` is optional hardening: it's where CI checks out
+the `archive` branch, so anyone reproducing the CI layout locally won't see it as
+untracked. Both patterns are root-anchored deliberately — an unanchored `output/`
+would ignore a directory named `output` at any depth, e.g. a future build artifact
+under `pages-v2/`. And note the inverse trap: the **archive branch's own
+`.gitignore` must never gain an `output` entry** — the auto-commit runs against that
+branch's ignore rules, and would silently stop committing data.)
 
 ### 3b. Retarget the workflow
 
@@ -130,9 +138,9 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository (code, main)
+      - name: Checkout repository (branch main)
         uses: actions/checkout@v4
-      - name: Checkout archive branch (data)          # CHANGED: second checkout
+      - name: Checkout data (branch archive)          # CHANGED: second checkout
         uses: actions/checkout@v4
         with:
           ref: archive
@@ -221,7 +229,23 @@ Notes:
 - `verified-bot-commit` file globs are resolved relative to `workspace:`, so the
   existing `output/...` patterns work unchanged.
 
-### 3c. Repoint the website
+### 3c. Fix the path-relative oxfmt ignore patterns
+
+`.oxfmtrc.json` deliberately excludes the encrypted resource-index files (which have
+`.json` names but aren't JSON) from formatting. Those patterns are anchored to
+`output/raw/...`, so they stop matching once the workflow formats `data/output`
+instead — oxfmt then errors on the encrypted blobs and fails the run. Prefix the
+patterns with `**/` so they match at both locations (local runs still format
+`./output`; CI formats `data/output`):
+
+```json
+"ignorePatterns": [
+  "**/output/raw/**/index_main.json",
+  "**/output/raw/**/index_initial.json"
+]
+```
+
+### 3d. Repoint the website
 
 `pages-v2` fetches data at runtime from raw URLs hardcoded to `main`. Swap the branch
 segment everywhere:
@@ -230,16 +254,21 @@ segment everywhere:
 grep -rl 'refs/heads/main/output' pages-v2/src | xargs sed -i 's#refs/heads/main/output#refs/heads/archive/output#g'
 ```
 
-(Roughly 16 occurrences: `pages-v2/src/utils/constants.ts`,
+(17 occurrences: `pages-v2/src/utils/constants.ts`,
 `pages-v2/src/legacy/utils/constants.ts`, and a duplicated URL helper in the
 components. Optional follow-up: centralize the duplicated helpers onto the existing
 constant so the next move is one line.)
 
-### 3d. Update the README
+### 3e. Update the README
 
 Add a short section: data lives on the [`archive`](../../tree/archive) branch;
 contributors should clone with `git clone --single-branch -b main <url>` (or
 `--filter=blob:none`) to skip downloading the archive history.
+
+Also fix the two existing references that break: the "API outputs are stored in the
+[`output`](/output/) directory" link must point at the archive branch
+(`/tree/archive/output`), and the later sentence about "the mirror list JSON in the
+`output` directory" should likewise say the archive branch.
 
 ## Phase 4 — Push and verify
 
@@ -273,10 +302,61 @@ Then verify end-to-end **before** re-enabling the cron:
    git checkout -b my-feature origin/main           # in a fresh clone
    git apply --3way feature.patch
    ```
-5. Optional tidy-up: one commit on `archive` deleting the now-stale code directories
-   (`src/`, `pages-v2/`, configs) and adding a stub README ("this is the data branch;
-   code lives on `main`"). Purely cosmetic — the workflow never reads code from
-   `archive`. Doing it later (or never) is fine.
+5. **Optional tidy-up of the `archive` branch** — see the subsection below. Doing it
+   later (or never) is fine.
+
+### Optional: tidying the archive branch
+
+After the split, `archive`'s working tree still carries a stale snapshot of old
+`main`'s code. One commit removes it. This is *mostly* cosmetic — the workflow never
+reads code from `archive` — but two removals have real value:
+
+- Deleting `.github/` removes the stale workflow file, so nobody can accidentally
+  dispatch the **old** workflow with the Actions branch picker set to `archive`.
+- Deleting the old `.gitignore` (rather than replacing it) removes the trap from
+  Phase 3a: this branch must never have ignore rules matching `output`, or the
+  auto-commits silently stop staging data. The data branch needs no ignore rules.
+
+**When:** only after the migration has soaked for a few days of green auto-runs. The
+untouched `archive` tip *is* the rollback target; this commit buries it one commit
+deeper, so record the SHA it replaces.
+
+**How** (the checkout materializes ~1 GB of working tree; auto-commits land every few
+minutes, so expect to rebase or briefly pause the cron):
+
+```bash
+git clone --depth 1 --branch archive https://github.com/daydreamer-json/ak-endfield-api-archive.git archive-tidy
+cd archive-tidy
+
+# Record the pristine pre-tidy tip — this is the rollback target from now on
+git rev-parse HEAD
+
+# Delete every top-level entry except the data, the license, and .git itself
+find . -mindepth 1 -maxdepth 1 ! -name .git ! -name output ! -name LICENSE -exec git rm -rq {} +
+
+cat > README.md <<'EOF'
+# archive (data branch)
+
+Auto-committed API archive data. Source code, issues, and documentation live on
+the [`main`](../../tree/main) branch. Do not add ignore rules for `output/` to
+this branch — the auto-commit workflow stages files under this branch's ignore
+rules and would silently stop committing data.
+EOF
+
+git add README.md
+git commit -m "Tidy archive branch: keep data only (code lives on main)"
+git push origin archive   # if rejected because an auto-commit raced you:
+                          # git pull --rebase && git push
+```
+
+`LICENSE` is kept deliberately — the archived data is still being redistributed under
+it. `MEMO.md`, configs, and the rest live on in `main` (and in this branch's history).
+
+Strictly, only `output/` is functionally required — but rehearse this step before
+running it for real (see the rehearsal doc): if oxfmt resolves its config per-file by
+walking up from `data/output`, deleting this branch's old `.oxfmtrc.json` could
+resurface the encrypted-index format errors. If the post-tidy rehearsal run fails at
+the format step, keep `.oxfmtrc.json` as a fourth survivor on this branch.
 
 ## Rollback
 
@@ -287,8 +367,10 @@ Then verify end-to-end **before** re-enabling the cron:
   ```bash
   git push --force origin refs/heads/archive:refs/heads/main
   ```
-  (If the optional Phase 5.5 cleanup commit was already made, push the SHA just before
-  it instead, or restore from the Phase 0 mirror backup.)
+  (If the optional tidy-up commit was already made, push the pre-tidy SHA recorded in
+  that step instead — by then new auto-commits will sit on top of the tidy-up, so the
+  recorded SHA is the reliable pointer, not `archive~1`. Last resort: the Phase 0
+  mirror backup.)
 
 ## Expected questions
 
@@ -301,7 +383,7 @@ trivial — but that's years away at current growth.
 
 **Does a plain `git clone` get faster?** Only with `--single-branch` (or
 `--filter=blob:none`), because a default clone fetches all branches including
-`archive`. Hence the README note in 3d. GitHub's ZIP download and `actions/checkout`
+`archive`. Hence the README note in 3e. GitHub's ZIP download and `actions/checkout`
 are per-branch and benefit automatically.
 
 **Why not avoid the rewrite entirely and just branch going forward?** That stops future
@@ -309,16 +391,53 @@ pollution but permanently bakes the existing ~420 MB into `main`'s history. Sinc
 rewrite's cost (re-forks, re-clones) is at its minimum right now, doing it properly once
 is worth the extra hour.
 
-**Ordering vs the bulletin feature (issue #3)?** Land this first. Bulletins add binary
-banner assets; they should hit the `archive` branch from day one rather than deepening
-`main`'s history before a later rewrite.
+**Ordering vs the bulletin feature (issue #3)?** The bulletin feature has since merged
+(PR #4), so its banner assets and JSON now accumulate on `main` with every auto-run —
+one more reason to do the split promptly rather than keep deepening the history that
+will be rewritten.
+
+**Why is the rewritten `main` still ~100 MB, not tiny?** Because the website's assets
+live on `main` too. Measured breakdown of the non-`output/` history: ~87 MB is
+`pages-v2/src/assets` — chiefly 179 webfont files (the complete Iosevka family at
+~1.5 MB per woff2, already compressed so git can't delta it) — ~19 MB is assets of the
+deleted v1 `pages/` site that exist only in history, and under 1 MB is actual code.
+Still a 4× reduction with a readable history. Two optional extras if smaller matters:
+add `--path pages` to the filter-repo command to also drop the dead v1 assets
+(zero working-tree impact), and if the site ever trims the font set to the handful of
+weights it uses (or loads them from a CDN), the rewrite is the one free moment to purge
+the old font blobs from history too — pruning them in a normal commit later keeps
+paying for them in history forever.
+
+**Will commits stay "Verified"?** Not on the rewritten `main`, by necessity: a
+signature covers a commit's exact content, so filter-repo strips signatures from every
+commit it rewrites, and since new parent SHAs ripple forward, effectively all surviving
+code commits lose their badge. They will show *no* badge (grey), not a red
+"Unverified" — unless the commit author has GitHub vigilant mode enabled, in which case
+their now-unsigned commits do display "Unverified". Everything else keeps its
+verification: the `archive` branch preserves the original signed commits untouched, and
+all future commits are unaffected (auto-commits are API-signed by GitHub — the point of
+`verified-bot-commit` — and web-UI merges are signed by GitHub's web-flow key). If the
+badge loss matters, the rewritten history can be re-signed with the owner's own key,
+but for ~100 commits of tooling history it is cosmetic.
+
+**Why does `archive` keep the `output/` wrapper folder instead of having the data at
+its root?** Unrolling was considered and rejected for the migration itself. It reads
+nicer, but every way of doing it costs something permanent: a `git mv` commit puts a
+rename seam across every archived file (GitHub's file-history view doesn't follow
+renames, and per-file history is a core feature of an archive), while rewriting the
+archive side too would break old commit-SHA links and forfeit the branch's role as the
+built-in rollback. Keeping the wrapper is free, keeps every consumer change down to a
+single branch-name swap, and preserves the option to unroll later — most naturally if
+the data ever moves to a dedicated repo.
 
 ---
 
 ## Appendix: rehearsing the migration in a private mirror
 
 The whole runbook can be dress-rehearsed end-to-end in an isolated private repo before
-touching the real one. Two facts make the rehearsal high-fidelity with zero setup:
+touching the real one. (A fully expanded, copy-pasteable version of this procedure —
+every command written out, plus a rollback rehearsal — is in `REHEARSAL.md`.)
+Two facts make the rehearsal high-fidelity with zero setup:
 
 - **No secrets are required.** `config/config_auth.yaml` is only read by
   `ghMirrorUpload` (`src/cmds/ghMirrorUpload.ts`), which the workflow already runs with
