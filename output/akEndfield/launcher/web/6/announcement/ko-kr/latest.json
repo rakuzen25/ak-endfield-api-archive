@@ -30,6 +30,14 @@
             "pin": 0
           },
           {
+            "content": "PC 클라이언트 업데이트 안내",
+            "jump_url": "https://endfield.gryphline.com/news/7016",
+            "start_ts": "1784167200000",
+            "id": "854",
+            "need_token": false,
+            "pin": 0
+          },
+          {
             "content": "「심연으로」 버전 업데이트 설명",
             "jump_url": "https://endfield.gryphline.com/news/5200",
             "start_ts": "1784163600000",
@@ -82,6 +90,14 @@
             "id": "831",
             "need_token": false,
             "pin": 0
+          },
+          {
+            "content": "신규 버전 토론 이벤트",
+            "jump_url": "https://www.skport.com/article?id=2077308566596882273&hg_media=launcher&hg_link_campaign=banner&hg_link_name=homecoming",
+            "start_ts": "1784199600000",
+            "id": "859",
+            "need_token": false,
+            "pin": 0
           }
         ],
         "tab_id": "58"
@@ -102,6 +118,14 @@
             "jump_url": "https://endfield.gryphline.com/ja-jp/news/4499",
             "start_ts": "1768838400000",
             "id": "67",
+            "need_token": false,
+            "pin": 0
+          },
+          {
+            "content": "Discord 게임 통계 위젯 지원!",
+            "jump_url": "https://endfield.gryphline.com/special/discord-binding",
+            "start_ts": "1784260800000",
+            "id": "872",
             "need_token": false,
             "pin": 0
           }
